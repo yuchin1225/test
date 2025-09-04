@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<!--
+質數與合數遊戲 - 使用 Supabase 作為後端
+
+Supabase 設置說明：
+1. 創建一個 Supabase 專案
+
+2. 在 SQL 編輯器中創建 history 表：
+   CREATE TABLE history (
+     id UUID PRIMARY KEY,
+     created_at TIMESTAMPTZ DEFAULT NOW(),
+     name VARCHAR,
+     score INT4
+   );
+
+3. 設置 Row Level Security (RLS) 政策以允許匿名用戶操作：
+   a) 啟用 RLS：
+      ALTER TABLE history ENABLE ROW LEVEL SECURITY;
+   
+   b) 創建允許讀取的政策：
+      CREATE POLICY "Allow public read access" ON history
+      FOR SELECT USING (true);
+   
+   c) 創建允許插入/更新的政策：
+      CREATE POLICY "Allow public insert/update access" ON history
+      FOR ALL USING (true) WITH CHECK (true);
+
+4. 在 JavaScript 中的 URL 和 ANON_KEY 已設置完成
+
+注意：以上 RLS 政策允許所有用戶讀寫，適合遊戲演示。
+在生產環境中，您可能需要更嚴格的安全政策。
+-->
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>質數與合數遊戲</title>
+    <!-- Use Tailwind CSS for a modern, responsive design -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for a game-like feel */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f4f8;
+            /* Light gray background */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .game-container {
+            background-color: #ffffff;
+            border-radius: 20px;
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+            padding: 40px;
+            text-align: center;
+            max-width: 500px;
+            width: 100%;
+            transition: all 0.3s ease-in-out;
+            margin-bottom: 20px;
+        }
+
+        .game-container:hover {
+            box-shadow: 0 15px 30px rgba(0, 0, 0, 0.2);
+        }
+
+        .number-display {
+            font-size: 8rem;
+            font-weight: bold;
+            color: #334155;
+            /* Slate-600 */
+            margin: 20px 0;
+            user-select: none;
+        }
+
+        .message-display {
+            min-height: 40px;
+            font-size: 1.5rem;
+            font-weight: 500;
+            margin-bottom: 20px;
+        }
+
+        .score-display {
+            font-size: 1.25rem;
+            color: #64748b;
+            /* Slate-500 */
+            margin-top: 20px;
+        }
+
+        .timer-display {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #f59e0b;
+            /* Amber-500 */
+        }
+
+        .correct {
+            color: #16a34a;
+            /* Green-600 */
+        }
+
+        .wrong {
+            color: #dc2626;
+            /* Red-600 */
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        @media (max-width: 640px) {
+            .number-display {
+                font-size: 5rem;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="game-container">
+        <h1 class="text-3xl font-bold text-gray-800 mb-6">質數合數遊戲</h1>
+        <p class="text-lg text-gray-600 mb-4">請在45秒內盡可能地答對更多題目</p>
+
+        <!-- Initial screen for user name input -->
+        <div id="start-screen" class="mt-8">
+            <h2 class="text-xl font-semibold mb-4 text-gray-700">輸入您的名稱</h2>
+            <input type="text" id="player-name-input" placeholder="您的名稱"
+                class="w-full p-3 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition duration-200">
+            <button id="start-btn"
+                class="bg-indigo-600 text-white font-bold py-3 px-8 rounded-full shadow-lg mt-6 hover:bg-indigo-700 transition duration-300 transform hover:scale-105">
+                開始遊戲
+            </button>
+        </div>
+
+        <!-- Game screen (initially hidden) -->
+        <div id="game-screen" class="hidden">
+            <!-- Timer display -->
+            <div id="timer-display" class="timer-display"></div>
+
+            <!-- The number to be guessed -->
+            <div id="number-display" class="number-display select-none">--</div>
+
+            <!-- Message for feedback -->
+            <div id="message-display" class="message-display"></div>
+            <div id="explanation-display" class="text-gray-600 mt-4 text-base font-normal"></div>
+
+            <!-- Buttons for user input -->
+            <div class="flex justify-center gap-4 mt-8">
+                <button id="prime-btn"
+                    class="bg-indigo-600 text-white font-bold py-3 px-8 rounded-full shadow-lg hover:bg-indigo-700 transition duration-300 transform hover:scale-105 disabled:bg-indigo-400">
+                    質數
+                </button>
+                <button id="composite-btn"
+                    class="bg-sky-600 text-white font-bold py-3 px-8 rounded-full shadow-lg hover:bg-sky-700 transition duration-300 transform hover:scale-105 disabled:bg-sky-400">
+                    合數
+                </button>
+            </div>
+
+            <!-- Restart button -->
+            <button id="restart-btn"
+                class="hidden bg-gray-500 text-white font-bold py-3 px-8 rounded-full shadow-lg mt-4 hover:bg-gray-600 transition duration-300 transform hover:scale-105">
+                重新開始
+            </button>
+
+            <!-- Score display -->
+            <div class="score-display">
+                分數：<span id="score-count">0</span> / <span id="question-count">0</span>
+            </div>
+        </div>
+
+        <!-- Leaderboard -->
+        <div class="mt-8 pt-8 border-t border-gray-200">
+            <h2 class="text-2xl font-bold text-gray-800 mb-4">排行榜</h2>
+            <div id="leaderboard" class="space-y-2 text-left">
+                <!-- Leaderboard items will be inserted here by JavaScript -->
+            </div>
+            <div class="mt-4 text-sm text-gray-500 break-words">
+                您的使用者ID：<span id="user-id">讀取中...</span>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        // Supabase imports
+        import { createClient } from 'https://cdn.skypack.dev/@supabase/supabase-js';
+
+        // UUID generation function
+        function generateUUID() {
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                const r = Math.random() * 16 | 0;
+                const v = c == 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+        }
+
+        // Get all necessary HTML elements
+        const startScreen = document.getElementById('start-screen');
+        const gameScreen = document.getElementById('game-screen');
+        const playerNameInput = document.getElementById('player-name-input');
+        const startBtn = document.getElementById('start-btn');
+        const numberDisplay = document.getElementById('number-display');
+        const messageDisplay = document.getElementById('message-display');
+        const explanationDisplay = document.getElementById('explanation-display');
+        const scoreCountDisplay = document.getElementById('score-count');
+        const questionCountDisplay = document.getElementById('question-count');
+        const primeBtn = document.getElementById('prime-btn');
+        const compositeBtn = document.getElementById('composite-btn');
+        const timerDisplay = document.getElementById('timer-display');
+        const leaderboardDiv = document.getElementById('leaderboard');
+        const userIdDisplay = document.getElementById('user-id');
+        const restartBtn = document.getElementById('restart-btn');
+
+        // Game state variables
+        let currentNumber;
+        let score = 0;
+        let questionCount = 0;
+        let totalTimerInterval;
+        const TOTAL_TIME = 5; // Use a constant for the game time
+        let totalTime = TOTAL_TIME;
+        let isGameRunning = false;
+        let isSupabaseReady = false;
+        let playerName = '';
+
+        // Supabase variables
+        let userId;
+        let supabase;
+
+        // Game Logic Functions (Moved to the top to ensure they are defined before being called)
+        const isPrime = num => {
+            if (num <= 1) return false;
+            for (let i = 2; i <= Math.sqrt(num); i++) {
+                if (num % i === 0) return false;
+            }
+            return true;
+        };
+
+        const getFactors = (num) => {
+            const factors = [];
+            for (let i = 1; i <= num; i++) {
+                if (num % i === 0) {
+                    factors.push(i);
+                }
+            }
+            return factors;
+        };
+
+        const startTotalTimer = () => {
+            clearInterval(totalTimerInterval);
+            timerDisplay.textContent = `剩餘時間: ${totalTime} 秒`;
+            totalTimerInterval = setInterval(() => {
+                if (isGameRunning) {
+                    totalTime--;
+                    timerDisplay.textContent = `剩餘時間: ${totalTime} 秒`;
+                    if (totalTime <= 0) {
+                        endGame();
+                    }
+                }
+            }, 1000);
+        };
+
+        const endGame = () => {
+            isGameRunning = false;
+            clearInterval(totalTimerInterval);
+            primeBtn.disabled = true;
+            compositeBtn.disabled = true;
+            numberDisplay.textContent = '--';
+            messageDisplay.textContent = '遊戲結束！';
+            messageDisplay.classList.remove('correct', 'wrong');
+            explanationDisplay.textContent = `您總共答對了 ${score} 題！`;
+            restartBtn.classList.remove('hidden');
+            saveScore();
+        }
+
+        const generateNumber = () => {
+            if (!isGameRunning) return;
+
+            primeBtn.disabled = false;
+            compositeBtn.disabled = false;
+            messageDisplay.textContent = '';
+            explanationDisplay.textContent = '';
+            messageDisplay.className = 'message-display';
+            numberDisplay.textContent = '--';
+
+            // Generate a random number between 2 and 100 (inclusive)
+            currentNumber = Math.floor(Math.random() * 99) + 2;
+            numberDisplay.textContent = currentNumber;
+        };
+
+        const checkAnswer = (userIsPrime) => {
+            if (!isGameRunning) return;
+
+            primeBtn.disabled = true;
+            compositeBtn.disabled = true;
+
+            const isCurrentNumberPrime = isPrime(currentNumber);
+            const isAnswerCorrect = (userIsPrime !== null) &&
+                ((userIsPrime && isCurrentNumberPrime) || (!userIsPrime && !isCurrentNumberPrime));
+
+            questionCount++;
+            if (isAnswerCorrect) {
+                score++;
+                messageDisplay.textContent = '答對了！';
+                messageDisplay.classList.add('correct');
+            } else {
+                messageDisplay.textContent = '答錯了！';
+                messageDisplay.classList.add('wrong');
+
+                // Show detailed explanation for wrong answers
+                const factors = getFactors(currentNumber);
+                explanationDisplay.textContent = `因為 ${currentNumber} 的因數有：${factors.join('、')}`;
+            }
+
+            scoreCountDisplay.textContent = score;
+            questionCountDisplay.textContent = questionCount;
+
+            // Automatically move to the next question after a short delay
+            setTimeout(() => {
+                if (isGameRunning) generateNumber();
+            }, 1500);
+        };
+
+        const startGame = () => {
+            score = 0;
+            questionCount = 0;
+            totalTime = TOTAL_TIME;
+            isGameRunning = true;
+            restartBtn.classList.add('hidden');
+            scoreCountDisplay.textContent = score;
+            questionCountDisplay.textContent = questionCount;
+            startTotalTimer();
+            generateNumber();
+        };
+
+        const handleStartGame = () => {
+            playerName = playerNameInput.value.trim() || `使用者 ${userId.substring(0, 4)}`;
+            startScreen.classList.add('hidden');
+            gameScreen.classList.remove('hidden');
+            startGame();
+        };
+
+
+        // Supabase Functions
+        const saveScore = async () => {
+            if (!isSupabaseReady || !userId) {
+                console.error("Supabase not ready, cannot save score.");
+                return;
+            }
+
+            try {
+                // Check if user already has a score in the database
+                const { data: existingData, error: selectError } = await supabase
+                    .from('history')
+                    .select('score')
+                    .eq('id', userId)
+                    .maybeSingle(); // 使用 maybeSingle 而不是 single 來避免 PGRST116 錯誤
+
+                // 處理查詢錯誤（但 PGRST116 不是真正的錯誤）
+                if (selectError) {
+                    console.error("Error checking existing score:", selectError);
+                    return;
+                }
+
+                const currentHighScore = existingData ? existingData.score : 0;
+
+                // Only save score if it's a new high score
+                if (score > currentHighScore) {
+                    const { error: upsertError } = await supabase
+                        .from('history')
+                        .upsert({
+                            id: userId,
+                            name: playerName,
+                            score: score
+                            // 移除 created_at，讓資料庫自動設定
+                        });
+
+                    if (upsertError) {
+                        console.error("Error saving score:", upsertError);
+                        console.error("這可能是因為 Row Level Security (RLS) 政策阻止了操作");
+                        console.error("請檢查 Supabase 的 RLS 設定");
+                    } else {
+                        console.log("Score saved successfully!");
+                    }
+                }
+            } catch (e) {
+                console.error("Error saving score:", e);
+            }
+        };
+
+        const loadLeaderboard = async () => {
+            try {
+                // Get top 10 scores from Supabase
+                const { data: scores, error } = await supabase
+                    .from('history')
+                    .select('id, name, score, created_at')
+                    .order('score', { ascending: false })
+                    .limit(10);
+
+                if (error) {
+                    console.error("Error loading leaderboard:", error);
+                    return;
+                }
+
+                // Render leaderboard
+                leaderboardDiv.innerHTML = '';
+                if (!scores || scores.length === 0) {
+                    leaderboardDiv.innerHTML = '<p class="text-gray-500">尚無分數記錄。</p>';
+                    return;
+                }
+
+                scores.forEach((item, index) => {
+                    const scoreItem = document.createElement('div');
+                    scoreItem.className = `flex justify-between items-center p-2 rounded-lg ${item.id === userId ? 'bg-indigo-100 font-bold' : 'bg-gray-50'}`;
+
+                    // Display the player's name if available, otherwise use a shortened user ID
+                    const displayName = item.name || item.id.substring(0, 8);
+
+                    scoreItem.innerHTML = `
+                    <span>#${index + 1} ${displayName}</span>
+                    <span>${item.score} 分</span>
+                `;
+                    leaderboardDiv.appendChild(scoreItem);
+                });
+            } catch (e) {
+                console.error("Error loading leaderboard:", e);
+            }
+        };
+
+        // Set up real-time leaderboard updates
+        const setupRealtimeLeaderboard = () => {
+            if (!supabase) return;
+            
+            // Subscribe to changes in the history table
+            const subscription = supabase
+                .channel('history_changes')
+                .on('postgres_changes', 
+                    { 
+                        event: '*', 
+                        schema: 'public', 
+                        table: 'history' 
+                    }, 
+                    (payload) => {
+                        console.log('Database change detected:', payload);
+                        loadLeaderboard(); // Reload leaderboard when data changes
+                    }
+                )
+                .subscribe();
+
+            return subscription;
+        };
+
+        // Initialize Supabase
+        const initializeSupabase = async () => {
+            try {
+                // Initialize Supabase client
+                // 請將以下的 URL 和 ANON_KEY 替換為您的 Supabase 專案資訊
+                const SUPABASE_URL = 'https://dptehguqgkttzykxwmha.supabase.co';
+                const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRwdGVoZ3VxZ2t0dHp5a3h3bWhhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTY5Nzc5NTMsImV4cCI6MjA3MjU1Mzk1M30.RuqqBRQBXwBtW7q4t1ZwGVipffgpTzNYt4Tw22npQTg';
+                
+                supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+                // Generate a random UUID for the user
+                userId = generateUUID();
+                
+                // Store userId in localStorage to persist across sessions
+                const storedUserId = localStorage.getItem('gameUserId');
+                if (storedUserId) {
+                    userId = storedUserId;
+                        } else {
+                    localStorage.setItem('gameUserId', userId);
+                    }
+
+                    if (userId) {
+                        userIdDisplay.textContent = userId;
+                    isSupabaseReady = true;
+                    
+                    // Load leaderboard and set up real-time updates
+                    await loadLeaderboard();
+                    setupRealtimeLeaderboard();
+                    } else {
+                    console.error("User ID generation failed.");
+                    }
+            } catch (e) {
+                console.error("Supabase initialization failed:", e);
+            }
+        };
+
+        // Add event listeners
+        startBtn.addEventListener('click', handleStartGame);
+        primeBtn.addEventListener('click', () => checkAnswer(true));
+        compositeBtn.addEventListener('click', () => checkAnswer(false));
+        restartBtn.addEventListener('click', () => {
+            totalTime = TOTAL_TIME;
+            startGame();
+        });
+
+        // Start the game by initializing Supabase
+        window.onload = initializeSupabase;
+    </script>
+
+</body>
+
+</html>
