@@ -174,8 +174,13 @@ Supabase 設置說明：
 
         <!-- Leaderboard -->
         <div class="mt-8 pt-8 border-t border-gray-200">
-            <h2 class="text-2xl font-bold text-gray-800 mb-4">排行榜</h2>
-            <div id="leaderboard" class="space-y-2 text-left">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-2xl font-bold text-gray-800">🏆 排行榜</h2>
+                <div id="leaderboard-loading" class="hidden">
+                    <div class="animate-spin rounded-full h-5 w-5 border-b-2 border-indigo-600"></div>
+                </div>
+            </div>
+            <div id="leaderboard" class="space-y-2 text-left max-h-80 overflow-y-auto">
                 <!-- Leaderboard items will be inserted here by JavaScript -->
             </div>
             <div class="mt-4 text-sm text-gray-500 break-words">
@@ -211,6 +216,7 @@ Supabase 設置說明：
         const compositeBtn = document.getElementById('composite-btn');
         const timerDisplay = document.getElementById('timer-display');
         const leaderboardDiv = document.getElementById('leaderboard');
+        const leaderboardLoading = document.getElementById('leaderboard-loading');
         const userIdDisplay = document.getElementById('user-id');
         const restartBtn = document.getElementById('restart-btn');
 
@@ -383,6 +389,12 @@ Supabase 設置說明：
                         console.error("請檢查 Supabase 的 RLS 設定");
                     } else {
                         console.log("Score saved successfully!");
+                        // 顯示成功動畫
+                        showScoreSavedAnimation();
+                        // 儲存成功後立即更新排行榜
+                        setTimeout(() => {
+                            loadLeaderboard(true);
+                        }, 500); // 延遲 500ms 確保資料庫已更新
                     }
                 }
             } catch (e) {
@@ -390,8 +402,13 @@ Supabase 設置說明：
             }
         };
 
-        const loadLeaderboard = async () => {
+        const loadLeaderboard = async (showLoading = true) => {
             try {
+                // 顯示載入指示器
+                if (showLoading) {
+                    leaderboardLoading.classList.remove('hidden');
+                }
+
                 // Get top 10 scores from Supabase
                 const { data: scores, error } = await supabase
                     .from('history')
@@ -401,32 +418,84 @@ Supabase 設置說明：
 
                 if (error) {
                     console.error("Error loading leaderboard:", error);
+                    leaderboardDiv.innerHTML = '<p class="text-red-500">載入排行榜失敗</p>';
                     return;
                 }
 
                 // Render leaderboard
                 leaderboardDiv.innerHTML = '';
                 if (!scores || scores.length === 0) {
-                    leaderboardDiv.innerHTML = '<p class="text-gray-500">尚無分數記錄。</p>';
+                    leaderboardDiv.innerHTML = '<p class="text-gray-500 text-center py-4">🎮 還沒有玩家記錄，成為第一名吧！</p>';
                     return;
                 }
 
                 scores.forEach((item, index) => {
                     const scoreItem = document.createElement('div');
-                    scoreItem.className = `flex justify-between items-center p-2 rounded-lg ${item.id === userId ? 'bg-indigo-100 font-bold' : 'bg-gray-50'}`;
+                    const isCurrentUser = item.id === userId;
+                    const isTopThree = index < 3;
+                    
+                    // 獲取排名圖示
+                    const getRankIcon = (rank) => {
+                        switch(rank) {
+                            case 0: return '🥇';
+                            case 1: return '🥈';
+                            case 2: return '🥉';
+                            default: return `#${rank + 1}`;
+                        }
+                    };
+
+                    // 設定樣式類別
+                    let baseClass = 'flex justify-between items-center p-3 rounded-lg transition-all duration-200 border';
+                    if (isCurrentUser) {
+                        baseClass += ' bg-gradient-to-r from-indigo-100 to-purple-100 border-indigo-300 font-bold shadow-md';
+                    } else if (isTopThree) {
+                        baseClass += ' bg-gradient-to-r from-yellow-50 to-orange-50 border-yellow-200';
+                    } else {
+                        baseClass += ' bg-gray-50 border-gray-200 hover:bg-gray-100';
+                    }
+                    
+                    scoreItem.className = baseClass;
 
                     // Display the player's name if available, otherwise use a shortened user ID
-                    const displayName = item.name || item.id.substring(0, 8);
+                    const displayName = item.name || `玩家${item.id.substring(0, 4)}`;
+                    const timeAgo = getTimeAgo(new Date(item.created_at));
 
                     scoreItem.innerHTML = `
-                    <span>#${index + 1} ${displayName}</span>
-                    <span>${item.score} 分</span>
-                `;
+                        <div class="flex items-center space-x-3">
+                            <span class="text-lg font-bold ${isTopThree ? 'text-xl' : ''}">${getRankIcon(index)}</span>
+                            <div>
+                                <div class="font-medium ${isCurrentUser ? 'text-indigo-700' : 'text-gray-800'}">${displayName}</div>
+                                <div class="text-xs text-gray-500">${timeAgo}</div>
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <div class="font-bold text-lg ${isCurrentUser ? 'text-indigo-600' : 'text-gray-700'}">${item.score} 分</div>
+                            ${isCurrentUser ? '<div class="text-xs text-indigo-500">您的最佳成績</div>' : ''}
+                        </div>
+                    `;
                     leaderboardDiv.appendChild(scoreItem);
                 });
             } catch (e) {
                 console.error("Error loading leaderboard:", e);
+                leaderboardDiv.innerHTML = '<p class="text-red-500 text-center py-4">⚠️ 載入排行榜時發生錯誤</p>';
+            } finally {
+                // 隱藏載入指示器
+                if (showLoading) {
+                    leaderboardLoading.classList.add('hidden');
+                }
             }
+        };
+
+        // 時間格式化函數
+        const getTimeAgo = (date) => {
+            const now = new Date();
+            const diffInSeconds = Math.floor((now - date) / 1000);
+            
+            if (diffInSeconds < 60) return '剛剛';
+            if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)} 分鐘前`;
+            if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)} 小時前`;
+            if (diffInSeconds < 604800) return `${Math.floor(diffInSeconds / 86400)} 天前`;
+            return date.toLocaleDateString('zh-TW');
         };
 
         // Set up real-time leaderboard updates
@@ -444,12 +513,32 @@ Supabase 設置說明：
                     }, 
                     (payload) => {
                         console.log('Database change detected:', payload);
-                        loadLeaderboard(); // Reload leaderboard when data changes
+                        // 使用較短的延遲來即時更新排行榜
+                        setTimeout(() => {
+                            loadLeaderboard(false); // 不顯示載入指示器，因為是背景更新
+                        }, 200);
                     }
                 )
                 .subscribe();
 
             return subscription;
+        };
+
+        // 添加視覺效果：當分數被儲存時顯示動畫
+        const showScoreSavedAnimation = () => {
+            // 創建一個臨時的成功提示
+            const successMsg = document.createElement('div');
+            successMsg.className = 'fixed top-4 right-4 bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg transform transition-all duration-300 z-50';
+            successMsg.innerHTML = '✅ 分數已儲存！';
+            document.body.appendChild(successMsg);
+            
+            // 3秒後移除提示
+            setTimeout(() => {
+                successMsg.style.transform = 'translateX(100%)';
+                setTimeout(() => {
+                    document.body.removeChild(successMsg);
+                }, 300);
+            }, 3000);
         };
 
         // Initialize Supabase
